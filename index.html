@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>控え室環境チェッカー</title>
+    <script type="text/javascript" src="./lib/d3.js"></script>
+    <script src="https://cdn.mlkcca.com/v0.6.0/milkcocoa.js"></script>
+</head>
+
+<body bgcolor="ghostwhite" text="darkslategray">
+    <h5 align="center">電気系控え室の混雑状況・CO2濃度・温度・湿度を15分ごとに計測しています。
+    <br>換気のタイミング、エアコンの調整、控え室の空き具合の確認等に活用していただけたら幸いです。
+    <br>(※数値はあくまで目安であり、正しさを保証するものではありません。)</h5>
+
+    <table height="450" width="1250" border="1">
+        <tr>
+            <td width="200" valign="top">
+                <table cellpadding="10">
+                    <tr>
+                        <td>
+                            <table width="180" id="title">
+                            </table>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+            <td width="800" valign="top">
+                <table>
+                    <tr>
+                        <td width="800" height="400" id="graph"></td>
+                    </tr>
+                </table>
+            </td>
+            <td width="250">
+              <div class="twitter_widget_style">
+                <a class="twitter-timeline" data-width="250" data-height="450" data-theme="light" href="https://twitter.com/eeic_hikae">Tweets by eeic_hikae</a>
+              <script>!function(d,s,id){var js,fjs=d.getElementsByTagName(s)[0],p=/^http:/.test(d.location)?'http':'https';if(!d.getElementById(id)){
+                js=d.createElement(s);js.id=id;js.src=p+"://platform.twitter.com/widgets.js";fjs.parentNode.insertBefore(js,fjs);}}(document,"script","twitter-wjs");</script>
+              </div>
+            </td>
+        </tr>
+    </table>
+    <h6 align="center">混雑状況は、室内に設置した2台のカメラからの映像を、Optical Flowで物体検出することにより推定しています。
+    <br>カメラは15分おきに数秒起動し、撮影された動画ファイルは人数推定後削除されます。
+    <br>温度・湿度センサーにはRHT03を、CO2センサーにはMH-Z19を使用しています。
+    <br>Milkcocoaによりグラフはリアルタイムで更新されます。</h6>
+
+    <script type="text/javascript">
+        var dataset;
+        var rawdata;
+        var svg1;
+        var svg2;
+
+        var xscale = [];
+        var yscale = [];
+        var yscale_num_people = [];
+        var yscale_co2 = [];
+        var yscale_tmp = [];
+        var yscale_hum= [];
+
+        var color = d3.scaleOrdinal(d3.schemeCategory10);
+        var color2 = d3.scaleOrdinal(d3.schemeCategory10);
+        var viewpoint = 0;
+        var graphdata = [];
+
+        var wordfilter = 1;
+        var attentword = "";
+
+        var titles = ["混雑状況", "CO2濃度", "温度", "湿度"];
+        var type = ["num_people", "co2", "tmp", "hum"];
+
+        //index of co2
+        var default_type = 1;
+        var selected = 1;
+
+        // milkcocoa　からデータ獲得
+        var milkcocoa = new MilkCocoa('uniixkmdl8v.mlkcca.com');
+        //全データ
+        var datastore = [];
+        var camera1 = [];
+        var camera2 = [];
+
+        milkcocoa.dataStore('production').stream().size(40).next(function(err, datas) {
+
+          datastore = datas.map(function(d) {
+            return {
+              timestamp : new Date(d.timestamp),
+              num_people : 0,
+              co2: Number(d.value.co2),
+              tmp : Number(d.value.tmp),
+              hum : Number(d.value.hum)
+            }
+          });
+          console.log(datastore);
+        });
+
+        milkcocoa.dataStore('camera1').stream().size(40).next(function(err, datas) {
+
+          camera1 = datas.map(function(d) {
+            return {
+              timestamp : new Date(d.timestamp),
+              num_people : Number(d.value.num_people),
+            }
+          });
+          console.log(camera1);
+        });
+
+        milkcocoa.dataStore('camera2').stream().size(40).next(function(err, datas) {
+
+          camera2 = datas.map(function(d) {
+            return {
+              timestamp : new Date(d.timestamp),
+              num_people : Number(d.value.num_people),
+            }
+          });
+          console.log(camera2);
+
+          synthesize();
+        });
+
+
+        // datastoreにcamera1,camera2のデータ統合
+        function synthesize() {
+
+          for(var i = 0; i < (camera1.length < camera2.length ? camera1.length : camera2.length); i++) {
+            num = Number(camera1[i]["num_people"]) + Number(camera2[i]["num_people"]);
+            datastore[i]["num_people"] = String(num);
+          }
+          console.log(datastore);
+
+          svg1 = d3.select("#graph").append("svg").attr("width", 800).attr("height", 400);
+          createwavegraph(default_type);
+          createtitle();
+        }
+
+        //タイトルバーの作成
+        function createtitle() {
+            d3.select("#title").selectAll("tr").data(titles).enter()
+                .append("tr")
+                .attr("id", function(d, i) {
+                    return i;
+                })
+                .attr("style",
+                    function(d, i) {
+                        if (i == selected) {
+                            return "background-color: skyblue";
+                        } else {
+                            return "background-color: ghostwhite";
+                        }
+                    })
+                .attr("name", "title")
+                .attr("onClick", "changegraph(this)")
+                .append("td")
+                .style("color", function(d, i) {
+                    return color2(i);
+                })
+                .text(function(d) {
+                    return d;
+                });
+        }
+
+        //タイトルバーをクリックした時の関数
+        function changegraph(obj) {
+            var all_title = document.getElementsByName("title");
+            for (var i = 0; i < all_title.length; i++) {
+                all_title.item(i).style.backgroundColor = "ghostwhite";
+            }
+            console.log(obj.id);
+            selected = obj.id;
+            obj.style.backgroundColor = "skyblue";
+            createwavegraph(selected);
+        }
+
+        //折れ線グラフの作成  dはselected
+        function createwavegraph(d) {
+            svg1.selectAll("*").remove();
+            //createwaves(type[selected], true);
+            for (var i = 0; i < type.length; i++) {
+              if (d == i) {
+                  createwaves(i, true);
+              } else {
+                  createwaves(i, false);
+              }
+            }
+
+        }
+
+        //折れ線グラフの作成  datatypeはint valはboolean
+        function createwaves(datatype, val) {
+
+          var xmargin = 50;
+          var ymargin = 50;
+          var temp = 0;
+
+          xscale = d3.scaleTime().domain(d3.extent(datastore, function(d) { return d["timestamp"]; }));
+          xscale.range([0 + xmargin, 800 - xmargin]);
+
+          switch (datatype) {
+            case 0:
+              yscale_num_people =  d3.scaleLinear().domain(d3.extent(datastore, function(d) {  return Number(d[type[datatype]]); })).range([400 - ymargin, 0 + ymargin]);
+              yscale = yscale_num_people;  break;
+            case 1:
+              yscale_co2 = d3.scaleLinear().domain(d3.extent(datastore, function(d) {  return Number(d[type[datatype]]); })).range([400 - ymargin, 0 + ymargin]);
+              yscale = yscale_co2;  break;
+            case 2:
+              yscale_tmp = d3.scaleLinear().domain(d3.extent(datastore, function(d) {  return Number(d[type[datatype]]); })).range([400 - ymargin, 0 + ymargin]);
+              yscale = yscale_tmp;  break;
+            case 3:
+              yscale_hum = d3.scaleLinear().domain(d3.extent(datastore, function(d) {  return Number(d[type[datatype]]); })).range([400 - ymargin, 0 + ymargin]);
+              yscale = yscale_hum;  break;
+          }
+
+          var add = 700 / datastore.length;
+
+          if (val) {
+              var point = svg1.selectAll("circle").data(datastore).enter().append("circle");
+              point.attr("r", 5)
+                  .attr("fill", function(d) {
+                      return color(datatype);
+                  })
+                  .attr("cx", function(d, i) {
+                      return xscale(d["timestamp"]);
+                  })
+                  .attr("cy", function(d) {
+                      return yscale(d[type[datatype]]);
+                  })
+                  .attr("fill-opacity", function(d) {
+                      if (val) {
+                          return 1;
+                      } else {
+                          return 0.5;
+                      }
+                  })
+          }
+
+          var line = d3.line().x(function(d, i) {
+                  return xscale(d["timestamp"]);
+              })
+              .y(function(d) {
+                  return yscale(Number(d[type[datatype]]));
+              });
+
+          svg1.append("path")
+              .attr("d", line(datastore))
+              .style("stroke-width", 2)
+              .style("stroke", function(d) {
+                  return color(datatype);
+              })
+              .style("fill", "none")
+              .style("stroke-opacity", function(d) {
+                  if (val) {
+                      return 1;
+                  } else {
+                      return 0.3;
+                  }
+              });
+
+          if (val) {
+              var yAxis = d3.axisLeft(
+                  d3.scaleLinear()
+                  .domain(yscale.domain()).range([350, 50]));
+              svg1.append("g")
+                  .attr("class", "axis")
+                  .attr("transform", "translate(50,0)")
+                  .call(yAxis);
+
+              var xAxis = d3.axisBottom(xscale.range([0 + xmargin, 800 - xmargin]))
+                  .ticks(10)
+                  .tickFormat(d3.timeFormat("%H:%M"));
+
+              svg1.append("g")
+                  .attr("class", "axis")
+                  .attr("transform", "translate(0,350)")
+                  .call(xAxis);
+
+              var tx;
+              switch (datatype) {
+                case 0: tx = "(人)";  break;
+                case 1: tx = "(ppm)";  break;
+                case 2: tx = "(℃)";  break;
+                case 3: tx = "(%)";  break;
+              }
+              svg1.append("text").attr("x", "20").attr("y", "40").text(titles[datatype] + tx);
+
+          }
+        }
+
+    </script>
+
+</body>
+
+</html>

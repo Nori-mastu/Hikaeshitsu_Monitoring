@@ -66,6 +66,12 @@
         //index of co2
         var default_type = 1;
         var selected = 1;
+        
+        //全データ
+        var datastore = [];
+
+        // milkcocoa　からデータ獲得
+        var milkcocoa = new MilkCocoa('uniixkmdl8v.mlkcca.com');
 
         milkcocoa.dataStore('production').stream().size(40).next(function(err, datas) {
 
